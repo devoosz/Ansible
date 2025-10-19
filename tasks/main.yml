@@ -1,0 +1,114 @@
+---
+- name: Upgrade Cisco AnyConnect Application on Linux
+  hosts: all
+  become: yes
+
+  vars:
+    cisco_anyconnect_download_url: "https://its.gmu.edu/wp-content/uploads/cisco-secure-client-linux64-5.1.3.62-predeploy-k9.tar.gz"
+   # anyconnect_package_path: "/home/salem/Downloads/cisco-secure-client-linux64-5.1.3.62-predeploy-k9.tar.gz"
+    anyconnect_install_dir: "/opt/cisco/anyconnect"
+    cisco_anyconnect_install_dir: /opt
+    cisco_anyconnect_version: "{{ cisco_anyconnect_download_url | regex_search('cisco-secure-client-linux64-(\\d+\\.\\d+\\.\\d+\\.\\d+)', '\\1') | first }}"
+    cisco_anyconnect_tmp_dir: "/tmp/cisco-anyconnect"
+  tasks:
+    - name: Ensure temporary directory exists
+      ansible.builtin.file:
+        path: "/tmp/cisco-anyconnect"
+        state: directory
+        mode: "0755"
+    
+    - name: Create version directory
+      ansible.builtin.file:
+        path: "{{ cisco_anyconnect_install_dir }}/cisco-secure-client-linux64-{{ cisco_anyconnect_version }}"
+        state: directory
+        mode: "0755" 
+   
+   # - name: Create temporary Cisco directory symlink
+   #   ansible.builtin.file:
+   #     src: "{{ cisco_anyconnect_install_dir }}/cisco-secure-client-linux64-{{ cisco_anyconnect_version }}"
+   #     dest: "/opt/cisco"  # The Cisco Anyconnect installer hardcodes this path.
+   #     state: link
+   #     force: yes
+
+    - name: Get Cisco Anyconnect package
+      ansible.builtin.get_url:
+        url: "{{ cisco_anyconnect_download_url }}"
+        dest: "{{ cisco_anyconnect_tmp_dir }}/cisco-secure-client-linux64-{{ cisco_anyconnect_version }}-predeploy-k9.tar.gz"
+        mode: "0644"
+      register: download_result
+      until: download_result is succeeded
+      retries: 5
+      delay: "{{ 120 | random }}"
+
+    - name: Check if AnyConnect is installed
+      stat:
+        path: "{{ anyconnect_install_dir }}"
+      register: anyconnect_installed
+
+#    - name: Stop AnyConnect services
+#      systemd:
+#        name: vpnagentd
+#        state: stopped
+#      when: anyconnect_installed.stat.exists
+
+    - name: Extract AnyConnect package
+      unarchive:
+        src: "{{ cisco_anyconnect_download_url }}"
+        dest: /tmp/
+        remote_src: yes
+      when: anyconnect_installed.stat.exists
+   
+    - name: Ensure temporary directory exists
+      ansible.builtin.file:
+        path: "/tmp/cisco-anyconnect"
+        state: directory
+        mode: "0755"
+
+    - name: Create version directory
+      ansible.builtin.file:
+        path: "{{ cisco_anyconnect_install_dir }}/cisco-secure-client-linux64-{{ cisco_anyconnect_version }}"
+        state: directory
+        mode: "0755"
+
+#    - name: Create temporary Cisco directory symlink
+#      ansible.builtin.file:
+#        src: "{{ cisco_anyconnect_install_dir }}/cisco-secure-client-linux64-{{ cisco_anyconnect_version }}"
+#        dest: "/opt/cisco"  # The Cisco Anyconnect installer hardcodes this path.
+#        state: link
+    
+    - name: Run Cisco Anyconnect installer
+      ansible.builtin.shell:
+        cmd: set -o pipefail && echo "y" | ./vpn_install.sh
+        chdir: "/tmp/cisco-secure-client-linux64-{{ cisco_anyconnect_version }}/vpn"
+        creates: "{{ cisco_anyconnect_install_dir }}/cisco-secure-client-linux64-{{ cisco_anyconnect_version }}/anyconnect"
+        executable: /bin/bash
+
+#    - name: Run AnyConnect installer
+#      command: >
+#        /tmp/cisco-secure-client-linux64-5.1.3.62/vpn/vpn_install.sh
+#        chdir: "{{ cisco_anyconnect_tmp_dir }}"
+#      when: anyconnect_installed.stat.exists
+
+    - name: Start AnyConnect services
+      systemd:
+        name: vpnagentd
+        state: started
+      when: anyconnect_installed.stat.exists
+
+    - name: Ensure AnyConnect is installed if not present
+      block:
+        - name: Extract AnyConnect package
+          unarchive:
+            src: "{{ cisco_anyconnect_download_url }}"
+            dest: /tmp/anyconnect
+            remote_src: yes
+
+        - name: Run AnyConnect installer
+          command: >
+            /tmp/anyconnect/vpn/vpn_install.sh
+            chdir: /tmp/anyconnect/vpn
+      when: not anyconnect_installed.stat.exists
+
+    - name: Verify AnyConnect version
+      command: /opt/cisco/anyconnect/bin/vpn -v
+      register: anyconnect_version
